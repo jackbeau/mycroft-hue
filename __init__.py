@@ -70,13 +70,17 @@ def intent_handler(handler_function):
     def handler(self, message):
         if message.type == 'ConnectLightsIntent' \
                 or self.connected or self._connect_to_bridge():
-            group = self.default_group
+            light_list = [self.default_group]
             if "Group" in message.data:
                 name = message.data["Group"].lower()
                 group_id = self.groups_to_ids_map[name]
-                group = Group(self.bridge, group_id)
+                light_list = [Group(self.bridge, group_id)]
+
+            if "Light" in message.data:
+                name = message.data["Light"].lower()
+                light_list = self.lights_map[name]
             try:
-                handler_function(self, message, group)
+                handler_function(self, message, light_list)
             except PhueRequestTimeout:
                 self.speak_dialog('unable.to.perform.action')
             except Exception as e:
@@ -109,6 +113,12 @@ class PhillipsHueSkill(MycroftSkill):
             verbose = True if verbose == 'true' else False
         self.verbose = verbose
 
+        register_light_names = self.settings.get('register_light_names', False)
+        if type(register_light_names) == str:
+            register_light_names = register_light_names.lower()
+            register_light_names = True if register_light_names == "true" else False
+        self.register_light_names = register_light_names
+
         self.username = self.settings.get('username')
         if self.username == '':
             self.username = None
@@ -118,6 +128,7 @@ class PhillipsHueSkill(MycroftSkill):
         self.default_group = None
         self.groups_to_ids_map = dict()
         self.scenes_to_ids_map = dict()
+        self.lights_map = dict()
         self.colors_to_cie_color_map = self._map_colors_to_cie_colors(os.path.join(os.path.dirname(os.path.realpath(__file__)), "colors"))
 
     @property
@@ -170,6 +181,9 @@ class PhillipsHueSkill(MycroftSkill):
 
         self._register_groups_and_scenes()
         self._register_colors()
+
+        if self.register_light_names:
+            self._register_light_names()
 
     def _attempt_connection(self):
         """
@@ -292,6 +306,21 @@ class PhillipsHueSkill(MycroftSkill):
             self.scenes_to_ids_map[name] = id
             self.register_vocabulary(name, "Scene")
 
+    def _register_light_names(self):
+        """
+        Register lights with their names as vocab.
+        Multiple lights with the same name are grouped together.
+        """
+        lights = self.bridge.lights
+        for light in lights:
+            LOGGER.error("Registering light: "+ light.name)
+            name = light.name.lower()
+            if name in self.lights_map:
+                self.lights_map[name].append(light)
+            else:
+                self.lights_map[name] = [light]
+                self.register_vocabulary(name, "Light")
+
     def initialize(self):
         """
         Attempt to connect to the bridge,
@@ -316,7 +345,7 @@ class PhillipsHueSkill(MycroftSkill):
 
         toggle_intent = IntentBuilder("ToggleIntent") \
             .one_of("OffKeyword", "OnKeyword") \
-            .one_of("Group", "LightsKeyword") \
+            .one_of("Group", "Light", "LightsKeyword") \
             .build()
         self.register_intent(toggle_intent, self.handle_toggle_intent)
 
@@ -329,7 +358,7 @@ class PhillipsHueSkill(MycroftSkill):
 
         adjust_brightness_intent = IntentBuilder("AdjustBrightnessIntent") \
             .one_of("IncreaseKeyword", "DecreaseKeyword", "DimKeyword") \
-            .one_of("Group", "LightsKeyword") \
+            .one_of("Group", "Light", "LightsKeyword") \
             .optionally("BrightnessKeyword") \
             .build()
         self.register_intent(adjust_brightness_intent,
@@ -337,7 +366,7 @@ class PhillipsHueSkill(MycroftSkill):
 
         set_brightness_intent = IntentBuilder("SetBrightnessIntent") \
             .require("Value") \
-            .one_of("Group", "LightsKeyword") \
+            .one_of("Group", "Light", "LightsKeyword") \
             .optionally("BrightnessKeyword") \
             .build()
         self.register_intent(set_brightness_intent,
@@ -346,7 +375,7 @@ class PhillipsHueSkill(MycroftSkill):
         adjust_color_temperature_intent = \
             IntentBuilder("AdjustColorTemperatureIntent") \
             .one_of("IncreaseKeyword", "DecreaseKeyword") \
-            .one_of("Group", "LightsKeyword") \
+            .one_of("Group", "Light", "LightsKeyword") \
             .require("ColorTemperatureKeyword") \
             .build()
         self.register_intent(adjust_color_temperature_intent,
@@ -364,77 +393,85 @@ class PhillipsHueSkill(MycroftSkill):
             IntentBuilder("ChangeLightColorIntent") \
             .require("ColorKeyword") \
             .require("Color") \
-            .one_of("Group", "LightsKeyword") \
+            .one_of("Group", "Light", "LightsKeyword") \
             .build()
         self.register_intent(change_color_intent,
                              self.handle_change_color_intent)
 
     @intent_handler
-    def handle_toggle_intent(self, message, group):
+    def handle_toggle_intent(self, message, light_list):
         if "OffKeyword" in message.data:
             dialog = 'turn.off'
-            group.on = False
+            for light in light_list:
+                light.on = False
         else:
             dialog = 'turn.on'
-            group.on = True
+            for light in light_list:
+                light.on = True
         if self.verbose:
             self.speak_dialog(dialog)
 
     @intent_handler
-    def handle_activate_scene_intent(self, message, group):
+    def handle_activate_scene_intent(self, message, light_list):
         scene_name = message.data['Scene'].lower()
         scene_id = self.scenes_to_ids_map[scene_name]
         if scene_id:
             if self.verbose:
                 self.speak_dialog('activate.scene',
                                   {'scene': scene_name})
-            self.bridge.activate_scene(group.group_id, scene_id)
+            #in this special case light_list only contains one group
+            self.bridge.activate_scene(light_list[0].group_id, scene_id)
         else:
             self.speak_dialog('scene.not.found',
                               {'scene': scene_name})
 
     @intent_handler
-    def handle_adjust_brightness_intent(self, message, group):
+    def handle_adjust_brightness_intent(self, message, light_list):
         if "IncreaseKeyword" in message.data:
-            brightness = group.brightness + self.brightness_step
-            group.brightness = \
-                brightness if brightness < 255 else 254
+            for light in light_list:
+                brightness = light.brightness + self.brightness_step
+                light.brightness = \
+                    brightness if brightness < 255 else 254
             dialog = 'increase.brightness'
         else:
-            brightness = group.brightness - self.brightness_step
-            group.brightness = brightness if brightness > 0 else 0
+            for light in light_list:
+                brightness = light.brightness - self.brightness_step
+                light.brightness = brightness if brightness > 0 else 0
             dialog = 'decrease.brightness'
         if self.verbose:
             self.speak_dialog(dialog)
 
     @intent_handler
-    def handle_set_brightness_intent(self, message, group):
+    def handle_set_brightness_intent(self, message, light_list):
         value = int(message.data['Value'].rstrip('%'))
         brightness = int(value / 100.0 * 254)
-        group.on = True
-        group.brightness = brightness
+        for light in light_list:
+            light.on = True
+            light.brightness = brightness
         if self.verbose:
             self.speak_dialog('set.brightness', {'brightness': value})
 
     @intent_handler
-    def handle_adjust_color_temperature_intent(self, message, group):
+    def handle_adjust_color_temperature_intent(self, message, light_list):
         if "IncreaseKeyword" in message.data:
-            color_temperature = \
-                group.colortemp_k + self.color_temperature_step
-            group.colortemp_k = \
-                color_temperature if color_temperature < 6500 else 6500
+            for light in light_list:
+                color_temperature = \
+                    light.colortemp_k + self.color_temperature_step
+                light.colortemp_k = \
+                    color_temperature if color_temperature < 6500 else 6500
             dialog = 'increase.color.temperature'
         else:
-            color_temperature = \
-                group.colortemp_k - self.color_temperature_step
-            group.colortemp_k = \
-                color_temperature if color_temperature > 2000 else 2000
+            for light in light_list:
+                color_temperature = \
+                    light.colortemp_k - self.color_temperature_step
+                light.colortemp_k = \
+                    color_temperature if color_temperature > 2000 else 2000
             dialog = 'decrease.color.temperature'
         if self.verbose:
             self.speak_dialog(dialog)
 
     @intent_handler
-    def handle_connect_lights_intent(self, message, group):
+    def handle_connect_lights_intent(self, message, light_list):
         if self.user_supplied_ip:
             self.speak_dialog('ip.in.config')
             return
@@ -443,9 +480,11 @@ class PhillipsHueSkill(MycroftSkill):
         self._connect_to_bridge(acknowledge_successful_connection=True)
     
     @intent_handler
-    def handle_change_color_intent(self, message, group):
+    def handle_change_color_intent(self, message, light_list):
         if message.data["Color"] in self.colors_to_cie_color_map:
-            group.xy = self.colors_to_cie_color_map[message.data["Color"]]
+            for light in light_list:
+                light.on = True
+                light.xy = self.colors_to_cie_color_map[message.data["Color"]]
             dialog = "change.color"
         else:
             dialog = "color.not.found"

@@ -11,11 +11,22 @@
                         "type": "checkbox",
                         "label": "Verbose",
                         "value": false
-		    },
-		    {
-			"type": "label",
-			"name": "verbose_label",
-			"label": "<p>If you'd like Mycroft to give a verbal confirmation after you give him a command related to your Philip's Hue lights, check the 'Verbose' box.</p>"
+                    },
+                    {
+                    "type": "label",
+                    "name": "verbose_label",
+                    "label": "<p>If you'd like Mycroft to give a verbal confirmation after you give him a command related to your Philip's Hue lights, check the 'Verbose' box.</p>"
+                    },
+                    {
+                        "name": "register_light_names",
+                        "type": "checkbox",
+                        "label": "Register light names",
+                        "value": false
+                    },
+                    {
+                        "type": "label",
+                        "name": "register_light_names_label",
+                        "label": "<p>If you'd like Mycroft to register your light names, so you can control single lights, check the 'Register light names' box. Multiple lights with the same name are grouped together.</p>"
                     },
                     {
                         "name": "brightness_step",
