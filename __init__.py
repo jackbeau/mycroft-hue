@@ -313,7 +313,6 @@ class PhillipsHueSkill(MycroftSkill):
         """
         lights = self.bridge.lights
         for light in lights:
-            LOGGER.error("Registering light: "+ light.name)
             name = light.name.lower()
             if name in self.lights_map:
                 self.lights_map[name].append(light)
